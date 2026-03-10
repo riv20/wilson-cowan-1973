@@ -45,9 +45,9 @@ class NullStimulus(NonspecificStimulus):
 
 class SquareWave(StimulusBase):
     def __init__(self,
-                 center, # nm
-                 width, # nm
-                 P, # Hz
+                 center, # μm
+                 width, # μm
+                 P, # kHz
                  duration, # ms
                  start = 0
                  ):
@@ -69,9 +69,9 @@ class SquareWave(StimulusBase):
     
 class PulseTrain(StimulusBase):
     def __init__(self,
-                 center,    # nm
-                 width,     # nm
-                 P,         # amplitude
+                 center,    # μm
+                 width,     # μm
+                 P,         # kHz
                  freq,      # Hz (pulses per second)
                  duration   # ms (pulse ON time)
                  ):
@@ -93,8 +93,8 @@ class PulseTrain(StimulusBase):
     
 class StaticWave(StimulusBase):
     def __init__(self,
-                 amplitude, # Hz
-                 L, # nm
+                 amplitude, # kHz
+                 L, # μm
                  n, # integer
                  duration
                  ):
@@ -112,12 +112,12 @@ class StaticWave(StimulusBase):
     
 class FenderJuleszStimulus(StimulusBase):
     def __init__(self,
-                 center,
-                 k,
-                 v,
-                 sigma,
+                 center, # μm
+                 k, # kHz
+                 v, # μm / ms
+                 sigma, # μm
                  delay,
-                 turnaround
+                 turnaround # μm
                  ):
         
         self.center = center
