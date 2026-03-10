@@ -54,31 +54,40 @@ class ActivityCurves:
         if t is not None and x is not None:
             return pd.DataFrame(dict(E = [self.E[idx_t, idx_x]], I = [self.I[idx_t, idx_x]], P = [self.P[idx_t, idx_x]], Q = [self.Q[idx_t, idx_x]]))
 
-def check_params(params, epsilon = .1):
-    # refractory period must be much smaller than membrane time constant
-    assert params["r_E"] / params["tau"] <= epsilon
-    assert params["r_I"] / params["tau"] <= epsilon
-
-    # resting state E=I=0 must be stable to small perturbations
-    assert params["rho_E"] * params["v_E"] * params["b_EE"] * params["sigma_EE"] / params["theta_E"] <= epsilon
-    assert params["rho_E"] * params["v_I"] * params["b_II"] * params["sigma_II"] / params["theta_I"] <= epsilon
-
-    # uniformly excited state should be unstable in absence of stimulus
-    assert 1/(1 + params["r_E"]) + 2*params["b_EE"]*params["sigma_EE"] - 2*params["b_IE"]*params["sigma_IE"]/(1+params["r_I"]) < params["theta_E"]
-    assert 1/(1 + params["r_E"]) + 2*params["b_EI"]*params["sigma_EI"] - 2*params["b_II"]*params["sigma_II"]/(1+params["r_I"]) > params["theta_I"]
- 
-    # E → I interaction must be longer range than E → E
-    assert params["sigma_EI"] > params["sigma_EE"]
-
 class WilsonCowan:
     def __init__(self, **kwargs):
-        param_names = {'tau', 'alpha', 'r_E', 'r_I', 'rho_E', 'rho_I', 'v_E', 'v_I', 'theta_E', 'theta_I', 'b_EE', 'b_IE', 'b_EI', 'b_II', 'sigma_EE', 'sigma_IE', 'sigma_EI', 'sigma_II'}
+        param_names = {'mu', # ms
+                       'alpha', # adim
+
+                       'r_E', # ms
+                       'r_I',
+
+                       'F_E', # kHz
+                       'F_I',
+
+                       'rho_E', # μm⁻¹
+                       'rho_I',
+
+                       'v_E', # adim
+                       'v_I',
+
+                       'theta_E', # adim
+                       'theta_I',
+
+                       'b_EE', # adim
+                       'b_IE',
+                       'b_EI',
+                       'b_II',
+
+                       'sigma_EE', # μm
+                       'sigma_IE',
+                       'sigma_EI',
+                       'sigma_II'
+                       }
 
         if set(kwargs) != param_names:
             raise ValueError(f"Expected kwargs [{', '.join(param_names)}], got [{', '.join(list(kwargs))}]")
         
-        check_params(kwargs)
-
         for param, val in kwargs.items():
             setattr(self, param, val)
 
@@ -86,142 +95,174 @@ class WilsonCowan:
             v = kwargs[f"v_{k}"]
             theta = kwargs[f"theta_{k}"]
             S = lambda n, v=v, theta=theta: 1/(1 + np.exp(-v*(n-theta))) - 1/(1 + np.exp(v*theta))
-            setattr(self, f"S_{k}", S) # mV → adim
+            setattr(self, f"S_{k}", S) # int → adim
 
         for k in ("E", "I"):
             for l in ("E", "I"):
                 b = kwargs[f"b_{k}{l}"]
                 sigma = kwargs[f"sigma_{k}{l}"]
-                beta = lambda x, b=b, sigma=sigma: b*np.exp(-np.abs(x)/sigma)
+                beta = lambda x, b=b, sigma=sigma: b*np.exp(-np.abs(x)/sigma) # μm → adim
                 setattr(self, f"beta_{k}{l}", beta)
 
-    def run(self, xmin, xmax, num_nodes, num_steps=None, t_max=None, dt=1, P=NullStimulus(), Q=NullStimulus(), dtype="float32"):
+    def run(self,
+            
+            xmin, # μm
+            xmax, # μm
+
+            num_nodes, # int
+            num_steps=None, # int
+            
+            t_max=None, # ms
+            dt=1, # ms
+
+            P=NullStimulus(), # (ms, μm) → kHz
+            Q=NullStimulus(), # (ms, μm) → kHz
+
+            dtype="float32"
+            ):
+        
         if num_steps is None:
             assert t_max is not None
             num_steps = int(t_max / dt)
 
-        dx = (xmax - xmin) / (num_nodes - 1)
-        X = np.linspace(xmin, xmax, num_nodes, dtype=dtype)
-        T = np.linspace(0, t_max, num_steps, dtype=dtype)
+        dx = (xmax - xmin) / (num_nodes - 1) # μm
+        X = np.linspace(xmin, xmax, num_nodes, dtype=dtype) # μm
+        T = np.linspace(0, t_max, num_steps, dtype=dtype) # ms
 
         def conv(field, beta_fn):
             K = beta_fn(X - X[0])
-            K = np.concatenate([K[:0:-1], K])
+            K = np.concatenate([K[:0:-1], K]) # μm
 
             return dx * np.convolve(field, K, mode="full")[num_nodes-1:2*num_nodes-1]
 
-        E = np.zeros((num_steps, num_nodes), dtype=dtype)
-        I = np.zeros((num_steps, num_nodes), dtype=dtype)
+        E = np.zeros((num_steps, num_nodes), dtype=dtype) # kHz
+        I = np.zeros((num_steps, num_nodes), dtype=dtype) # kHz
 
         p = np.zeros((num_steps, num_nodes))
         q = np.zeros((num_steps, num_nodes))
 
         for i in tqdm(range(num_steps - 1)):
-            conv_ee = conv(E[i], self.beta_EE)
+            conv_ee = conv(E[i], self.beta_EE) # kHz × μm = mm/s
             conv_ie = conv(I[i], self.beta_IE)
             conv_ei = conv(E[i], self.beta_EI)
             conv_ii = conv(I[i], self.beta_II)
 
-            p[i] = P.eval(X, i*dt)
+            p[i] = P.eval(X, i*dt) # kHz
             q[i] = Q.eval(X, i*dt)
 
-            Ne = self.alpha * (conv_ee - conv_ie + p[i])
-            Ni = self.alpha * (conv_ei - conv_ii + q[i])
+            # [rho × conv] = kHz
+            Ne = self.alpha*self.mu*(self.rho_E*conv_ee - self.rho_I*conv_ie + p[i]) # adim
+            Ni = self.alpha*self.mu*(self.rho_E*conv_ei - self.rho_I*conv_ii + q[i])
 
-            Se = self.S_E(Ne)
+            Se = self.S_E(Ne) # adim
             Si = self.S_I(Ni)
 
-            dE = (-E[i] + (1.0 - self.r_E * E[i]) * Se) / self.tau
-            dI = (-I[i] + (1.0 - self.r_I * I[i]) * Si) / self.tau
+            dE = (-E[i] + self.F_E*(1.0 - self.r_E*E[i])*Se) / self.mu # kHz / ms
+            dI = (-I[i] + self.F_I*(1.0 - self.r_I*I[i])*Si) / self.mu
 
-            E[i+1] = E[i] + dt * dE
-            I[i+1] = I[i] + dt * dI
+            E[i+1] = E[i] + dt*dE
+            I[i+1] = I[i] + dt*dI
 
-        return ActivityCurves(E, I, X, T, p, q)
+        return ActivityCurves(E, # kHz
+                              I, # kHz
+                              X, # μm
+                              T, # ms
+                              p, # kHz
+                              q, # kHz
+                              )
 
 class ActiveTransientModel(WilsonCowan):
     def __init__(self):
         super().__init__(
-            tau = 10,
-            alpha = 1,
+            mu = 10,
+            alpha = .1,
 
             r_E = 1,
             r_I = 1,
 
-            rho_E = 1, # mm⁻¹
-            rho_I = 1, # mm⁻¹
+            F_E = 1,
+            F_I = 1,
 
-            v_E = 0.5, # mV
+            rho_E = 1,
+            rho_I = 1,
+
+            v_E = 0.5,
             v_I = 0.3,
 
-            theta_E = 9.0, # mV⁻¹
+            theta_E = 9.0,
             theta_I = 17.0,
 
-            b_EE = 1.5, # adim
+            b_EE = 1.5,
             b_IE = 1.35,
             b_EI = 1.35,
             b_II = 1.8,
 
-            sigma_EE = 40, # mm
-            sigma_IE = 60, # mm
-            sigma_EI = 60, # mm
-            sigma_II = 30, # mm
+            sigma_EE = 40,
+            sigma_IE = 60,
+            sigma_EI = 60,
+            sigma_II = 30,
         )
 
 class OscillatoryModel(WilsonCowan):
     def __init__(self):
         super().__init__(
-            tau = 10, # ms
-            alpha = 1, # mV
+            mu = 10,
+            alpha = .1,
 
-            r_E = 1, # ms
-            r_I = 1, # ms
+            r_E = 1,
+            r_I = 1,
 
-            rho_E = 1, # mm⁻¹
-            rho_I = 1, # mm⁻¹
+            F_E = 1,
+            F_I = 1,
 
-            v_E = 0.5, # mV
+            rho_E = 1,
+            rho_I = 1,
+
+            v_E = 0.5,
             v_I = 1,
 
-            theta_E = 9.0, # mV⁻¹
+            theta_E = 9.0,
             theta_I = 15.0,
 
-            b_EE = 2.0, # adim
+            b_EE = 2.0,
             b_IE = 1.5,
             b_EI = 1.5,
             b_II = 0.1,
 
-            sigma_EE = 40, # mm
-            sigma_IE = 60, # mm
-            sigma_EI = 60, # mm
-            sigma_II = 20, # mm
+            sigma_EE = 40,
+            sigma_IE = 60,
+            sigma_EI = 60,
+            sigma_II = 20,
         )
 
 class SteadyStateModel(WilsonCowan):
     def __init__(self):
         super().__init__(
-            tau = 10, # ms
-            alpha = 1, # mV
+            mu = 10,
+            alpha = .1,
 
-            r_E = 1, # ms
-            r_I = 1, # ms
+            r_E = 1,
+            r_I = 1,
 
-            rho_E = 1, # mm⁻¹
-            rho_I = 1, # mm⁻¹
+            F_E = 1,
+            F_I = 1,
 
-            v_E = 0.5, # mV
+            rho_E = 1,
+            rho_I = 1,
+
+            v_E = 0.5,
             v_I = 0.3,
 
-            theta_E = 9.0, # mV⁻¹
+            theta_E = 9.0,
             theta_I = 17.0,
 
-            b_EE = 2.0, # adim
+            b_EE = 2.0,
             b_IE = 1.35,
             b_EI = 1.35,
             b_II = 1.8,
 
-            sigma_EE = 40, # mm
-            sigma_IE = 60, # mm
-            sigma_EI = 60, # mm
-            sigma_II = 30, # mm
+            sigma_EE = 40,
+            sigma_IE = 60,
+            sigma_EI = 60,
+            sigma_II = 30,
         )
