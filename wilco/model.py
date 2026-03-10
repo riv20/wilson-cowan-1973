@@ -63,8 +63,12 @@ def check_params(params, epsilon = .1):
     assert params["rho_E"] * params["v_E"] * params["b_EE"] * params["sigma_EE"] / params["theta_E"] <= epsilon
     assert params["rho_E"] * params["v_I"] * params["b_II"] * params["sigma_II"] / params["theta_I"] <= epsilon
 
-    # unstimulated uniformly excited state must be unstable
-    # assert 1 + params["r_E"]
+    # uniformly excited state should be unstable in absence of stimulus
+    assert 1/(1 + params["r_E"]) + 2*params["b_EE"]*params["sigma_EE"] - 2*params["b_IE"]*params["sigma_IE"]/(1+params["r_I"]) < params["theta_E"]
+    assert 1/(1 + params["r_E"]) + 2*params["b_EI"]*params["sigma_EI"] - 2*params["b_II"]*params["sigma_II"]/(1+params["r_I"]) > params["theta_I"]
+ 
+    # E → I interaction must be longer range than E → E
+    assert params["sigma_EI"] > params["sigma_EE"]
 
 class WilsonCowan:
     def __init__(self, **kwargs):
@@ -73,7 +77,7 @@ class WilsonCowan:
         if set(kwargs) != param_names:
             raise ValueError(f"Expected kwargs [{', '.join(param_names)}], got [{', '.join(list(kwargs))}]")
         
-        # check_params(kwargs)
+        check_params(kwargs)
 
         for param, val in kwargs.items():
             setattr(self, param, val)
